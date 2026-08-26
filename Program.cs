@@ -1,7 +1,10 @@
 using System;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
+using Microsoft.Win32.SafeHandles;
 using Everest60Rgb.Animations;
 using Everest60Rgb.Core;
 using Everest60Rgb.Hid;
@@ -13,116 +16,198 @@ namespace Everest60Rgb
 {
     /// <summary>
     /// Application entry point for the Mountain Everest 60 Status Indicator.
-    /// Runs directly in System Tray mode by default with console logging,
-    /// or executes one-shot CLI commands for external automation scripts.
+    /// Runs silently in System Tray mode by default (no command prompt window spawned).
+    /// If launched from an existing terminal (PowerShell/CMD), attaches to it to print logs seamlessly.
+    /// If --console or --debug is passed, allocates a new console window if needed.
     /// </summary>
     internal static class Program
     {
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool AttachConsole(uint dwProcessId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool AllocConsole();
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool FreeConsole();
+
+        private const uint ATTACH_PARENT_PROCESS = 0xFFFFFFFF;
+        private static bool _attachedConsole = false;
+
         [STAThread]
         private static void Main(string[] args)
         {
-            // If command-line arguments are provided, execute one-shot CLI commands with logging
-            if (args.Length > 0)
+            SetupConsole(args);
+
+            try
             {
-                string cmd = args[0].ToLowerInvariant();
-                switch (cmd)
+                // If command-line arguments are provided, execute one-shot CLI commands with logging
+                if (args != null && args.Length > 0)
                 {
-                    case "--status":
-                    case "--set-status":
-                    case "-s":
-                    case "--percent":
-                    case "-p":
-                        if (args.Length > 1)
-                        {
-                            double progress = ParseProgress(args[1]);
-                            RgbColor? customColor = (args.Length > 2) ? RgbColor.FromHex(args[2]) : (RgbColor?)null;
-                            RunManualStatus(progress, customColor);
-                        }
-                        else
-                        {
-                            Console.WriteLine("[ERROR] Missing percentage argument. Example: --status 75 \"#00FFCC\" or -s 50");
-                        }
-                        return;
-
-                    case "--battery":
-                    case "-b":
-                        RgbColor? batColor = (args.Length > 1) ? RgbColor.FromHex(args[1]) : (RgbColor?)null;
-                        RunOneShotIndicator(StatusSource.Battery, SystemMonitors.GetBatteryPercentage(), batColor);
-                        return;
-
-                    case "--volume":
-                    case "-v":
-                        RgbColor? volColor = (args.Length > 1) ? RgbColor.FromHex(args[1]) : (RgbColor?)null;
-                        RunOneShotIndicator(StatusSource.Volume, SystemMonitors.GetMasterVolume(), volColor);
-                        return;
-
-                    case "--cpu":
-                        RgbColor? cpuColor = (args.Length > 1) ? RgbColor.FromHex(args[1]) : (RgbColor?)null;
-                        RunOneShotIndicator(StatusSource.Cpu, SystemMonitors.GetCpuUsage(), cpuColor);
-                        return;
-
-                    case "--set-background":
-                    case "--bg":
-                        if (args.Length > 1)
-                        {
-                            var bg = RgbColor.FromHex(args[1]);
-                            SetBackground(bg);
-                        }
-                        else
-                        {
-                            Console.WriteLine("[ERROR] Missing hex color argument. Example: --set-background \"#FFFFFF\"");
-                        }
-                        return;
-
-                    case "--color":
-                    case "-c":
-                        if (args.Length > 1)
-                        {
-                            var color = RgbColor.FromHex(args[1]);
-                            SetBottomBorderColor(color);
-                        }
-                        else
-                        {
-                            Console.WriteLine("[ERROR] Missing hex color argument. Example: --color \"#00FFCC\"");
-                        }
-                        return;
-
-                    case "--clear-status":
-                    case "--off-bottom":
-                        ClearBottomStatusOnly();
-                        return;
-
-                    case "--off":
-                        TurnOffAll();
-                        return;
-
-                    case "--test":
-                        RunDiagnostics();
-                        return;
-
-                    case "--help":
-                    case "-h":
-                    case "/?":
-                        PrintHelp();
-                        return;
-
-                    default:
-                        // If the first argument is a number (e.g. `Everest60Rgb.exe 75 #00FFCC`), interpret as status
-                        if (double.TryParse(args[0].TrimEnd('%'), NumberStyles.Any, CultureInfo.InvariantCulture, out _))
-                        {
-                            double progress = ParseProgress(args[0]);
-                            RgbColor? customColor = (args.Length > 1) ? RgbColor.FromHex(args[1]) : (RgbColor?)null;
-                            RunManualStatus(progress, customColor);
+                    string cmd = args[0].ToLowerInvariant();
+                    switch (cmd)
+                    {
+                        case "--status":
+                        case "--set-status":
+                        case "-s":
+                        case "--percent":
+                        case "-p":
+                            if (args.Length > 1)
+                            {
+                                double progress = ParseProgress(args[1]);
+                                RgbColor? customColor = (args.Length > 2) ? RgbColor.FromHex(args[2]) : (RgbColor?)null;
+                                RunManualStatus(progress, customColor);
+                            }
+                            else
+                            {
+                                Console.WriteLine("[ERROR] Missing percentage argument. Example: --status 75 \"#00FFCC\" or -s 50");
+                            }
                             return;
-                        }
 
-                        Console.WriteLine($"[WARN] Unknown argument '{args[0]}'. Launching System Tray mode...");
-                        break;
+                        case "--battery":
+                        case "-b":
+                            RgbColor? batColor = (args.Length > 1) ? RgbColor.FromHex(args[1]) : (RgbColor?)null;
+                            RunOneShotIndicator(StatusSource.Battery, SystemMonitors.GetBatteryPercentage(), batColor);
+                            return;
+
+                        case "--volume":
+                        case "-v":
+                            RgbColor? volColor = (args.Length > 1) ? RgbColor.FromHex(args[1]) : (RgbColor?)null;
+                            RunOneShotIndicator(StatusSource.Volume, SystemMonitors.GetMasterVolume(), volColor);
+                            return;
+
+                        case "--cpu":
+                            RgbColor? cpuColor = (args.Length > 1) ? RgbColor.FromHex(args[1]) : (RgbColor?)null;
+                            RunOneShotIndicator(StatusSource.Cpu, SystemMonitors.GetCpuUsage(), cpuColor);
+                            return;
+
+                        case "--set-background":
+                        case "--bg":
+                            if (args.Length > 1)
+                            {
+                                var bg = RgbColor.FromHex(args[1]);
+                                SetBackground(bg);
+                            }
+                            else
+                            {
+                                Console.WriteLine("[ERROR] Missing hex color argument. Example: --set-background \"#FFFFFF\"");
+                            }
+                            return;
+
+                        case "--color":
+                        case "-c":
+                            if (args.Length > 1)
+                            {
+                                var color = RgbColor.FromHex(args[1]);
+                                SetBottomBorderColor(color);
+                            }
+                            else
+                            {
+                                Console.WriteLine("[ERROR] Missing hex color argument. Example: --color \"#00FFCC\"");
+                            }
+                            return;
+
+                        case "--clear-status":
+                        case "--off-bottom":
+                            ClearBottomStatusOnly();
+                            return;
+
+                        case "--off":
+                            TurnOffAll();
+                            return;
+
+                        case "--test":
+                            RunDiagnostics();
+                            return;
+
+                        case "--console":
+                        case "--debug":
+                        case "-d":
+                            // Launch tray app with console enabled
+                            RunTray();
+                            return;
+
+                        case "--help":
+                        case "-h":
+                        case "/?":
+                            PrintHelp();
+                            return;
+
+                        default:
+                            // If the first argument is a number (e.g. `Everest60Rgb.exe 75 #00FFCC`), interpret as status
+                            if (double.TryParse(args[0].TrimEnd('%'), NumberStyles.Any, CultureInfo.InvariantCulture, out _))
+                            {
+                                double progress = ParseProgress(args[0]);
+                                RgbColor? customColor = (args.Length > 1) ? RgbColor.FromHex(args[1]) : (RgbColor?)null;
+                                RunManualStatus(progress, customColor);
+                                return;
+                            }
+
+                            Console.WriteLine($"[WARN] Unknown argument '{args[0]}'. Launching System Tray mode...");
+                            break;
+                    }
+                }
+
+                // Default execution: Pure silent System Tray application
+                RunTray();
+            }
+            finally
+            {
+                if (_attachedConsole)
+                {
+                    FreeConsole();
                 }
             }
+        }
 
-            // Default execution: Pure System Tray application
-            RunTray();
+        private static void SetupConsole(string[] args)
+        {
+            // 1. Try to attach to the calling parent console (PowerShell, CMD, Windows Terminal)
+            if (AttachConsole(ATTACH_PARENT_PROCESS))
+            {
+                RedirectConsoleStreams();
+                _attachedConsole = true;
+            }
+            // 2. If launched from GUI/Explorer and user passed --console or --debug, open a new console window
+            else if (args != null && Array.Exists(args, a => a.Equals("--console", StringComparison.OrdinalIgnoreCase) ||
+                                                            a.Equals("--debug", StringComparison.OrdinalIgnoreCase) ||
+                                                            a.Equals("-d", StringComparison.OrdinalIgnoreCase) ||
+                                                            a.Equals("--log", StringComparison.OrdinalIgnoreCase)))
+            {
+                if (AllocConsole())
+                {
+                    RedirectConsoleStreams();
+                    _attachedConsole = true;
+                    try { Console.Title = "Everest 60 Status Indicator - Logs"; } catch { }
+                }
+            }
+        }
+
+        private static void RedirectConsoleStreams()
+        {
+            try
+            {
+                var conOut = Win32Hid.CreateFileW(
+                    "CONOUT$",
+                    Win32Hid.GENERIC_READ | Win32Hid.GENERIC_WRITE,
+                    Win32Hid.FILE_SHARE_READ | Win32Hid.FILE_SHARE_WRITE,
+                    IntPtr.Zero,
+                    Win32Hid.OPEN_EXISTING,
+                    0,
+                    IntPtr.Zero);
+
+                if (!conOut.IsInvalid)
+                {
+                    var fsOut = new FileStream(conOut, FileAccess.Write);
+                    var writerOut = new StreamWriter(fsOut, Console.OutputEncoding) { AutoFlush = true };
+                    Console.SetOut(writerOut);
+                    Console.SetError(writerOut);
+                }
+            }
+            catch
+            {
+                // Redirection fallback
+            }
         }
 
         private static void RunTray()
@@ -355,7 +440,7 @@ namespace Everest60Rgb
         private static void PrintHelp()
         {
             Console.WriteLine("Everest 60 Status Indicator - Command Line Reference:");
-            Console.WriteLine("  (No arguments)                      Launch background System Tray application (Default)");
+            Console.WriteLine("  (No arguments)                      Launch silent background System Tray application (Default)");
             Console.WriteLine("  --status, -s <0-100> [hex]          Manually set status bar percentage and optional color");
             Console.WriteLine("  --battery, -b [hex]                 Show battery % on bottom perimeter (preset or custom color)");
             Console.WriteLine("  --volume, -v [hex]                  Show volume % on bottom perimeter (preset or custom color)");
@@ -364,6 +449,7 @@ namespace Everest60Rgb
             Console.WriteLine("  --color, -c <hex>                   Set 15 bottom LEDs to a solid color");
             Console.WriteLine("  --clear-status                      Turn off bottom status LEDs (keys stay lit)");
             Console.WriteLine("  --off                               Turn off all keyboard LEDs completely");
+            Console.WriteLine("  --console, --debug, -d              Launch with a standalone console window for live logs");
             Console.WriteLine("  --test                              Run USB communication diagnostic test");
             Console.WriteLine("  --help, -h                          Show this reference information");
             Console.WriteLine();
