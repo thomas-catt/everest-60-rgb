@@ -20,7 +20,24 @@ because of how this keyboard behaves, there are some limitations introduced beca
 - set custom color for the entire keyboard's keys
 - set custom color for the status bar
 
-the app shuts off all of the other perimeter LEDs when it starts. 
+the app shuts off all of the other perimeter LEDs when it starts.
+
+to use this app within your own application, you can invoke status bar updates by passing command-line arguments:
+```powershell
+Everest60Rgb.exe --status <0-100> [hex_color]
+
+# or other aliases:
+Everest60Rgb.exe -s <0-100> [hex_color]
+Everest60Rgb.exe -set-status <0-100> [hex_color]
+```
+for example:
+```powershell
+Everest60Rgb.exe --status 25 "#FF00FF"
+Everest60Rgb.exe --status 100 "#00FF00"
+
+# to turn the status bar off:
+Everest60Rgb.exe -s 0
+```
 
 ## usage
 
