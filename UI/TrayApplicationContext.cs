@@ -213,12 +213,17 @@ namespace Everest60Rgb.UI
         private void ApplyKeyBackgroundColor(RgbColor keyColor)
         {
             Console.WriteLine($"[INFO] Setting key background color to {keyColor} and turning off perimeter LEDs...");
-            
-            // 1. Set all keys to the chosen color, turn OFF all 44 perimeter LEDs, and save to disk
-            RgbProfileManager.SetBackground(_controller.Framebuffer, keyColor, saveToDisk: true);
 
-            // 2. Trigger a full sync so keys immediately light up and perimeter is dark before status loop continues
-            _engine.SetSource(_engine.CurrentSource);
+            ApplyingProgressDialog.ExecuteWithProgress(() =>
+            {
+                // 1. Set all keys to the chosen color, turn OFF all 44 perimeter LEDs, and save to disk
+                RgbProfileManager.SetBackground(_controller.Framebuffer, keyColor, saveToDisk: true);
+
+                // 2. Trigger a full sync so keys immediately light up and perimeter is dark before status loop continues
+                _controller.SendFullCustomMap(_controller.CachedBrightness);
+                _engine.SetSource(_engine.CurrentSource);
+                return true;
+            }, $"Applying {keyColor.ToHex()} background to Everest 60...");
 
             _notifyIcon.ShowBalloonTip(1200, "Everest 60", $"Key background set to {keyColor.ToHex()} (Perimeter OFF)", ToolTipIcon.Info);
         }

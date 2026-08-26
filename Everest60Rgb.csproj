@@ -57,6 +57,7 @@
     <Compile Include="Protocol\Everest60Constants.cs" />
     <Compile Include="Protocol\Everest60PacketBuilder.cs" />
     <Compile Include="Protocol\RgbColor.cs" />
+    <Compile Include="UI\ApplyingProgressDialog.cs" />
     <Compile Include="UI\TrayApplicationContext.cs" />
   </ItemGroup>
   <ItemGroup>
