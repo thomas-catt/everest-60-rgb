@@ -4,7 +4,6 @@ using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
-using Microsoft.Win32.SafeHandles;
 using Everest60Rgb.Animations;
 using Everest60Rgb.Core;
 using Everest60Rgb.Hid;
@@ -18,7 +17,7 @@ namespace Everest60Rgb
     /// Application entry point for the Mountain Everest 60 Status Indicator.
     /// Runs silently in System Tray mode by default (no command prompt window spawned).
     /// If launched from an existing terminal (PowerShell/CMD), attaches to it to print logs seamlessly.
-    /// If --console or --debug is passed, allocates a new console window if needed.
+    /// CLI commands execute synchronously and exit immediately with an appropriate return code.
     /// </summary>
     internal static class Program
     {
@@ -41,7 +40,7 @@ namespace Everest60Rgb
 
             try
             {
-                // If command-line arguments are provided, execute one-shot CLI commands with logging
+                // If command-line arguments are provided, execute one-shot CLI commands and exit immediately
                 if (args != null && args.Length > 0)
                 {
                     string cmd = args[0].ToLowerInvariant();
@@ -56,29 +55,34 @@ namespace Everest60Rgb
                             {
                                 double progress = ParseProgress(args[1]);
                                 RgbColor? customColor = (args.Length > 2) ? RgbColor.FromHex(args[2]) : (RgbColor?)null;
-                                RunManualStatus(progress, customColor);
+                                bool ok = RunManualStatus(progress, customColor);
+                                ExitProcess(ok ? 0 : 1);
                             }
                             else
                             {
                                 Console.WriteLine("[ERROR] Missing percentage argument. Example: --status 75 \"#00FFCC\" or -s 50");
+                                ExitProcess(1);
                             }
                             return;
 
                         case "--battery":
                         case "-b":
                             RgbColor? batColor = (args.Length > 1) ? RgbColor.FromHex(args[1]) : (RgbColor?)null;
-                            RunOneShotIndicator(StatusSource.Battery, SystemMonitors.GetBatteryPercentage(), batColor);
+                            bool batOk = RunOneShotIndicator(StatusSource.Battery, SystemMonitors.GetBatteryPercentage(), batColor);
+                            ExitProcess(batOk ? 0 : 1);
                             return;
 
                         case "--volume":
                         case "-v":
                             RgbColor? volColor = (args.Length > 1) ? RgbColor.FromHex(args[1]) : (RgbColor?)null;
-                            RunOneShotIndicator(StatusSource.Volume, SystemMonitors.GetMasterVolume(), volColor);
+                            bool volOk = RunOneShotIndicator(StatusSource.Volume, SystemMonitors.GetMasterVolume(), volColor);
+                            ExitProcess(volOk ? 0 : 1);
                             return;
 
                         case "--cpu":
                             RgbColor? cpuColor = (args.Length > 1) ? RgbColor.FromHex(args[1]) : (RgbColor?)null;
-                            RunOneShotIndicator(StatusSource.Cpu, SystemMonitors.GetCpuUsage(), cpuColor);
+                            bool cpuOk = RunOneShotIndicator(StatusSource.Cpu, SystemMonitors.GetCpuUsage(), cpuColor);
+                            ExitProcess(cpuOk ? 0 : 1);
                             return;
 
                         case "--set-background":
@@ -86,11 +90,13 @@ namespace Everest60Rgb
                             if (args.Length > 1)
                             {
                                 var bg = RgbColor.FromHex(args[1]);
-                                SetBackground(bg);
+                                bool bgOk = SetBackground(bg);
+                                ExitProcess(bgOk ? 0 : 1);
                             }
                             else
                             {
                                 Console.WriteLine("[ERROR] Missing hex color argument. Example: --set-background \"#FFFFFF\"");
+                                ExitProcess(1);
                             }
                             return;
 
@@ -99,25 +105,30 @@ namespace Everest60Rgb
                             if (args.Length > 1)
                             {
                                 var color = RgbColor.FromHex(args[1]);
-                                SetBottomBorderColor(color);
+                                bool cOk = SetBottomBorderColor(color);
+                                ExitProcess(cOk ? 0 : 1);
                             }
                             else
                             {
                                 Console.WriteLine("[ERROR] Missing hex color argument. Example: --color \"#00FFCC\"");
+                                ExitProcess(1);
                             }
                             return;
 
                         case "--clear-status":
                         case "--off-bottom":
-                            ClearBottomStatusOnly();
+                            bool clearOk = ClearBottomStatusOnly();
+                            ExitProcess(clearOk ? 0 : 1);
                             return;
 
                         case "--off":
-                            TurnOffAll();
+                            bool offOk = TurnOffAll();
+                            ExitProcess(offOk ? 0 : 1);
                             return;
 
                         case "--test":
-                            RunDiagnostics();
+                            bool testOk = RunDiagnostics();
+                            ExitProcess(testOk ? 0 : 1);
                             return;
 
                         case "--console":
@@ -127,10 +138,16 @@ namespace Everest60Rgb
                             RunTray();
                             return;
 
+                        case "--tray":
+                        case "-t":
+                            RunTray();
+                            return;
+
                         case "--help":
                         case "-h":
                         case "/?":
                             PrintHelp();
+                            ExitProcess(0);
                             return;
 
                         default:
@@ -139,12 +156,15 @@ namespace Everest60Rgb
                             {
                                 double progress = ParseProgress(args[0]);
                                 RgbColor? customColor = (args.Length > 1) ? RgbColor.FromHex(args[1]) : (RgbColor?)null;
-                                RunManualStatus(progress, customColor);
+                                bool ok = RunManualStatus(progress, customColor);
+                                ExitProcess(ok ? 0 : 1);
                                 return;
                             }
 
-                            Console.WriteLine($"[WARN] Unknown argument '{args[0]}'. Launching System Tray mode...");
-                            break;
+                            Console.WriteLine($"[ERROR] Unknown argument '{args[0]}'.");
+                            PrintHelp();
+                            ExitProcess(1);
+                            return;
                     }
                 }
 
@@ -153,11 +173,14 @@ namespace Everest60Rgb
             }
             finally
             {
-                if (_attachedConsole)
-                {
-                    FreeConsole();
-                }
+                CleanupConsole();
             }
+        }
+
+        private static void ExitProcess(int exitCode)
+        {
+            CleanupConsole();
+            Environment.Exit(exitCode);
         }
 
         private static void SetupConsole(string[] args)
@@ -210,6 +233,19 @@ namespace Everest60Rgb
             }
         }
 
+        private static void CleanupConsole()
+        {
+            if (_attachedConsole)
+            {
+                _attachedConsole = false;
+                try
+                {
+                    FreeConsole();
+                }
+                catch { }
+            }
+        }
+
         private static void RunTray()
         {
             Console.WriteLine("==========================================================");
@@ -235,13 +271,31 @@ namespace Everest60Rgb
             string clean = input.Trim().TrimEnd('%');
             if (double.TryParse(clean, NumberStyles.Any, CultureInfo.InvariantCulture, out double val))
             {
-                if (val > 1.0) val /= 100.0; // Convert 75 -> 0.75
+                // 1. If input explicitly has a '%' sign (e.g. "1%", "50%", "100%", "0.5%")
+                if (input.Contains("%"))
+                {
+                    return Math.Max(0.0, Math.Min(1.0, val / 100.0));
+                }
+
+                // 2. If entered as 0..100 percentage integer/decimal > 1.0 (e.g. 50, 75, 100)
+                if (val > 1.0)
+                {
+                    return Math.Max(0.0, Math.Min(1.0, val / 100.0));
+                }
+
+                // 3. If entered as "1" or "1.0" for 1%
+                if (clean == "1" || clean == "1.0" || clean == "1.00")
+                {
+                    return 0.01;
+                }
+
+                // 4. If entered as a decimal fraction like 0.75 (75%) or 0.25 (25%) or 0 (0%)
                 return Math.Max(0.0, Math.Min(1.0, val));
             }
             return 0.0;
         }
 
-        private static void RunManualStatus(double progress, RgbColor? customColor)
+        private static bool RunManualStatus(double progress, RgbColor? customColor)
         {
             var sw = Stopwatch.StartNew();
             using (var controller = new Everest60Controller())
@@ -249,7 +303,7 @@ namespace Everest60Rgb
                 if (!controller.Connect())
                 {
                     Console.WriteLine("[ERROR] Mountain Everest 60 keyboard not found on USB.");
-                    return;
+                    return false;
                 }
 
                 int currentBrightness = controller.CachedBrightness;
@@ -265,15 +319,17 @@ namespace Everest60Rgb
                 if (ok)
                 {
                     Console.WriteLine($"[SUCCESS] Status applied and latched by Everest 60 hardware in {sw.ElapsedMilliseconds}ms (keys preserved, perimeter off).");
+                    return true;
                 }
                 else
                 {
                     Console.WriteLine("[ERROR] Failed to transmit USB reports.");
+                    return false;
                 }
             }
         }
 
-        private static void RunOneShotIndicator(StatusSource source, double value, RgbColor? customStatusColor = null)
+        private static bool RunOneShotIndicator(StatusSource source, double value, RgbColor? customStatusColor = null)
         {
             var sw = Stopwatch.StartNew();
             using (var controller = new Everest60Controller())
@@ -281,7 +337,7 @@ namespace Everest60Rgb
                 if (!controller.Connect())
                 {
                     Console.WriteLine("[ERROR] Mountain Everest 60 keyboard not found on USB.");
-                    return;
+                    return false;
                 }
 
                 int currentBrightness = controller.CachedBrightness;
@@ -297,15 +353,17 @@ namespace Everest60Rgb
                 if (ok)
                 {
                     Console.WriteLine($"[SUCCESS] {source} status applied and latched in {sw.ElapsedMilliseconds}ms (keys preserved, perimeter off).");
+                    return true;
                 }
                 else
                 {
                     Console.WriteLine("[ERROR] Failed to transmit USB reports.");
+                    return false;
                 }
             }
         }
 
-        private static void SetBackground(RgbColor color)
+        private static bool SetBackground(RgbColor color)
         {
             var sw = Stopwatch.StartNew();
             using (var controller = new Everest60Controller())
@@ -313,7 +371,7 @@ namespace Everest60Rgb
                 if (!controller.Connect())
                 {
                     Console.WriteLine("[ERROR] Mountain Everest 60 keyboard not found on USB.");
-                    return;
+                    return false;
                 }
 
                 int currentBrightness = controller.CachedBrightness;
@@ -326,15 +384,17 @@ namespace Everest60Rgb
                 if (ok)
                 {
                     Console.WriteLine($"[SUCCESS] Background applied and latched by hardware in {sw.ElapsedMilliseconds}ms (saved to rgb_map.json).");
+                    return true;
                 }
                 else
                 {
                     Console.WriteLine("[ERROR] Failed to transmit USB reports.");
+                    return false;
                 }
             }
         }
 
-        private static void SetBottomBorderColor(RgbColor color)
+        private static bool SetBottomBorderColor(RgbColor color)
         {
             var sw = Stopwatch.StartNew();
             using (var controller = new Everest60Controller())
@@ -342,7 +402,7 @@ namespace Everest60Rgb
                 if (!controller.Connect())
                 {
                     Console.WriteLine("[ERROR] Mountain Everest 60 keyboard not found on USB.");
-                    return;
+                    return false;
                 }
 
                 int currentBrightness = controller.CachedBrightness;
@@ -358,15 +418,17 @@ namespace Everest60Rgb
                 if (ok)
                 {
                     Console.WriteLine($"[SUCCESS] Bottom perimeter color applied in {sw.ElapsedMilliseconds}ms.");
+                    return true;
                 }
                 else
                 {
                     Console.WriteLine("[ERROR] Failed to transmit USB reports.");
+                    return false;
                 }
             }
         }
 
-        private static void ClearBottomStatusOnly()
+        private static bool ClearBottomStatusOnly()
         {
             var sw = Stopwatch.StartNew();
             using (var controller = new Everest60Controller())
@@ -374,34 +436,52 @@ namespace Everest60Rgb
                 if (!controller.Connect())
                 {
                     Console.WriteLine("[ERROR] Mountain Everest 60 keyboard not found on USB.");
-                    return;
+                    return false;
                 }
 
                 Console.WriteLine("[INFO] Clearing 15 bottom status LEDs (keys remain lit)...");
                 bool ok = controller.ClearBottomBorderOnly();
                 sw.Stop();
 
-                Console.WriteLine(ok ? $"[SUCCESS] Bottom LEDs cleared in {sw.ElapsedMilliseconds}ms." : "[ERROR] Failed to transmit USB reports.");
+                if (ok)
+                {
+                    Console.WriteLine($"[SUCCESS] Bottom LEDs cleared in {sw.ElapsedMilliseconds}ms.");
+                    return true;
+                }
+                else
+                {
+                    Console.WriteLine("[ERROR] Failed to transmit USB reports.");
+                    return false;
+                }
             }
         }
 
-        private static void TurnOffAll()
+        private static bool TurnOffAll()
         {
             using (var controller = new Everest60Controller())
             {
                 if (!controller.Connect())
                 {
                     Console.WriteLine("[ERROR] Mountain Everest 60 keyboard not found on USB.");
-                    return;
+                    return false;
                 }
 
                 Console.WriteLine("[INFO] Turning off all keyboard LEDs...");
                 bool ok = controller.TurnOffAll();
-                Console.WriteLine(ok ? "[SUCCESS] All LEDs turned off." : "[ERROR] Failed to transmit USB reports.");
+                if (ok)
+                {
+                    Console.WriteLine("[SUCCESS] All LEDs turned off.");
+                    return true;
+                }
+                else
+                {
+                    Console.WriteLine("[ERROR] Failed to transmit USB reports.");
+                    return false;
+                }
             }
         }
 
-        private static void RunDiagnostics()
+        private static bool RunDiagnostics()
         {
             Console.WriteLine("==========================================================");
             Console.WriteLine("  Everest 60 - Diagnostic Self-Test                       ");
@@ -428,13 +508,14 @@ namespace Everest60Rgb
                     bool ok = controller.SendFullCustomMap(bri);
 
                     Console.WriteLine($"[INFO] Transmission result: {(ok ? "PASS" : "FAIL")}");
+                    return ok;
                 }
                 else
                 {
                     Console.WriteLine("[ERROR] Mountain Everest 60 not detected on USB.");
+                    return false;
                 }
             }
-            Console.WriteLine("==========================================================");
         }
 
         private static void PrintHelp()
@@ -454,6 +535,7 @@ namespace Everest60Rgb
             Console.WriteLine("  --help, -h                          Show this reference information");
             Console.WriteLine();
             Console.WriteLine("Examples for External Automation:");
+            Console.WriteLine("  Everest60Rgb.exe -s 1               (Sets 1% progress bar)");
             Console.WriteLine("  Everest60Rgb.exe --status 75 \"#00FFCC\"");
             Console.WriteLine("  Everest60Rgb.exe --status 25 \"#FF2200\"");
             Console.WriteLine("  Everest60Rgb.exe -s 100 \"#00FF88\"");
